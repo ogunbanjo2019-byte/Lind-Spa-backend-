@@ -3,7 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const dotenv = require('dotenv');
-const nodemailer = require('nodemailer');
+const { Resend } = require('resend');
 const cors = require('cors');
 
 dotenv.config();
@@ -23,6 +23,8 @@ app.use(express.json({ limit: '100kb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use(cors({ origin: allowedOrigins }));
 if (hasFrontend) app.use(express.static(PUBLIC_DIR));
+
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 const services = new Set([
   'Swedish Massage',
@@ -74,28 +76,7 @@ function validateBooking(body) {
 }
 
 function emailConfigured() {
-  return Boolean(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS && process.env.BUSINESS_EMAIL);
-}
-
-function createTransporter() {
-  return nodemailer.createTransport({
-    host: process.env.SMTP_HOST,
-    port: Number(process.env.SMTP_PORT || 465),
-    secure: String(process.env.SMTP_SECURE || 'true') === 'true',
-    connectionTimeout: 15000,
-    greetingTimeout: 15000,
-    socketTimeout: 20000,
-    auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
-  });
-}
-
-function mailErrorDetails(error) {
-  return JSON.stringify({
-    message: error?.message || 'Unknown email delivery error',
-    code: error?.code || null,
-    responseCode: error?.responseCode || null,
-    command: error?.command || null
-  });
+  return Boolean(process.env.RESEND_API_KEY && process.env.BUSINESS_EMAIL);
 }
 
 function bookingText(b) {
@@ -125,9 +106,8 @@ app.post('/api/bookings', async (req, res) => {
   let emailed = false;
   if (emailConfigured()) {
     try {
-      const transporter = createTransporter();
-      await transporter.sendMail({
-        from: process.env.SMTP_USER,
+      await resend.emails.send({
+        from: 'onboarding@resend.dev',
         to: process.env.BUSINESS_EMAIL,
         replyTo: booking.email,
         subject: `Linda Spa booking inquiry — ${booking.name}`,
@@ -135,7 +115,7 @@ app.post('/api/bookings', async (req, res) => {
       });
       emailed = true;
     } catch (error) {
-      console.error('Email delivery failed; inquiry remains saved locally:', mailErrorDetails(error));
+      console.error('Email delivery failed; inquiry remains saved locally:', error?.message || error);
     }
   }
 
@@ -161,11 +141,12 @@ app.post('/api/contact', async (req, res) => {
   const contact = { id: crypto.randomUUID(), createdAt: new Date().toISOString(), name, email, message };
   fs.mkdirSync(DATA_DIR, { recursive: true });
   fs.appendFileSync(BOOKINGS_FILE, JSON.stringify({ type: 'contact', ...contact }) + '\n');
+  
   let emailed = false;
   if (emailConfigured()) {
     try {
-      await createTransporter().sendMail({
-        from: process.env.SMTP_USER,
+      await resend.emails.send({
+        from: 'onboarding@resend.dev',
         to: process.env.BUSINESS_EMAIL,
         replyTo: email,
         subject: `Linda Spa contact message — ${name}`,
@@ -173,7 +154,7 @@ app.post('/api/contact', async (req, res) => {
       });
       emailed = true;
     } catch (error) {
-      console.error('Contact email delivery failed; message remains saved locally:', mailErrorDetails(error));
+      console.error('Contact email delivery failed; message remains saved locally:', error?.message || error);
     }
   }
   return res.status(201).json({ ok: true, emailed, message: emailed ? 'Your message has been sent. Linda Spa will reply by email.' : 'Your message was saved locally. Please also call 862-251-5847.' });
@@ -188,5 +169,5 @@ app.get('*', (_req, res) => {
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Linda Spa website running at http://localhost:${PORT}`);
-  console.log(emailConfigured() ? 'SMTP email delivery is configured.' : 'SMTP not configured; inquiries will be saved to data/bookings.jsonl.');
+  console.log(emailConfigured() ? 'Resend email delivery is configured.' : 'Resend API key not configured; inquiries will be saved to data/bookings.jsonl.');
 });
