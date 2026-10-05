@@ -10,6 +10,8 @@ dotenv.config();
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
+const PUBLIC_DIR = path.join(__dirname, 'public');
+const hasFrontend = fs.existsSync(path.join(PUBLIC_DIR, 'index.html'));
 const allowedOrigins = (process.env.CORS_ORIGIN || 'http://localhost:5500,http://localhost:3000')
   .split(',')
   .map((origin) => origin.trim())
@@ -20,7 +22,7 @@ const BOOKINGS_FILE = path.join(DATA_DIR, 'bookings.jsonl');
 app.use(express.json({ limit: '100kb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use(cors({ origin: allowedOrigins }));
-app.use(express.static(path.join(__dirname, 'public')));
+if (hasFrontend) app.use(express.static(PUBLIC_DIR));
 
 const services = new Set([
   'Swedish Massage',
@@ -80,7 +82,19 @@ function createTransporter() {
     host: process.env.SMTP_HOST,
     port: Number(process.env.SMTP_PORT || 465),
     secure: String(process.env.SMTP_SECURE || 'true') === 'true',
+    connectionTimeout: 15000,
+    greetingTimeout: 15000,
+    socketTimeout: 20000,
     auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
+  });
+}
+
+function mailErrorDetails(error) {
+  return JSON.stringify({
+    message: error?.message || 'Unknown email delivery error',
+    code: error?.code || null,
+    responseCode: error?.responseCode || null,
+    command: error?.command || null
   });
 }
 
@@ -121,7 +135,7 @@ app.post('/api/bookings', async (req, res) => {
       });
       emailed = true;
     } catch (error) {
-      console.error('Email delivery failed; inquiry remains saved locally:', error.message);
+      console.error('Email delivery failed; inquiry remains saved locally:', mailErrorDetails(error));
     }
   }
 
@@ -159,7 +173,7 @@ app.post('/api/contact', async (req, res) => {
       });
       emailed = true;
     } catch (error) {
-      console.error('Contact email delivery failed; message remains saved locally:', error.message);
+      console.error('Contact email delivery failed; message remains saved locally:', mailErrorDetails(error));
     }
   }
   return res.status(201).json({ ok: true, emailed, message: emailed ? 'Your message has been sent. Linda Spa will reply by email.' : 'Your message was saved locally. Please also call 862-251-5847.' });
@@ -167,7 +181,10 @@ app.post('/api/contact', async (req, res) => {
 
 app.get('/api/health', (_req, res) => res.json({ ok: true, emailConfigured: emailConfigured() }));
 
-app.get('*', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
+app.get('*', (_req, res) => {
+  if (hasFrontend) return res.sendFile(path.join(PUBLIC_DIR, 'index.html'));
+  return res.status(404).json({ ok: false, error: 'API route not found.' });
+});
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Linda Spa website running at http://localhost:${PORT}`);
